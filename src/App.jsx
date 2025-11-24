@@ -1,149 +1,245 @@
-import { useEffect, useState } from 'react'
-import './App.css'
-import { Modal, ProductCard } from './Components/ProductCard'
-
-
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8) // genera un ID simple
-const STORAGE_KEY = 'cart_items' // clave para el almacenamiento local
-
-const SEED_PRODUCTS = [ // productos de ejemplo (Borrarlos cuando se conecte a un backend pliss)
-  { id: 'prod1', name: 'Producto 1', price: 10.0 },
-  { id: 'prod2', name: 'Producto 2', price: 15.5 },
-  { id: 'prod3', name: 'Producto 3', price: 7.25 },
-]
+import { useState } from 'react';
+import './App.css';
+import { FileUploader } from './Components/FileUploader';
+import { ProductTable } from './Components/ProductTable';
+import { ComparisonView } from './Components/ComparisonView';
+import { analyzeProductsMock } from './services/api';
+import { exportToCSV } from './utils/fileParser';
 
 export default function App() {
-  //variables
-  const [products, setProducts] = useState([]) // lista de productos
-  const [query, setQuery] = useState('') // consulta de búsqueda
-  const [selected, setSelected] = useState(null) // producto seleccionado
-  const [editing, setEditing] = useState(null) // producto editado
-  const [showForm, setShowForm] = useState(false) // mostrar/ocultar formulario
+  // Estados principales
+  const [products, setProducts] = useState([]);
+  const [fileName, setFileName] = useState(null);
+  const [analyzedProducts, setAnalyzedProducts] = useState(null);
+  const [analysisData, setAnalysisData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [view, setView] = useState('upload'); // 'upload', 'loaded', 'comparison'
 
-  //Evento para ejecutar la conversión de string a JSON
-  useEffect(() => {
-    const raw = localStorage.getItem(STORAGE_KEY)// leer de localStorage
-    if (raw) {
-      try {
-        setProducts(JSON.parse(raw)) // intentar parsear JSON del backEnd
-      } catch (e){
-        setProducts(SEED_PRODUCTS) // si falla, usar productos de ejemplo
+  // Manejar carga de archivo
+  const handleFileLoaded = (loadedProducts, name) => {
+    setProducts(loadedProducts);
+    setFileName(name);
+    setView('loaded');
+    setError(null);
+  };
+
+  // Analizar productos con IA
+  const handleAnalyze = async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Usar mock mientras no tengas backend
+      // Cuando tengas backend, cambiar a: analyzeProducts(products)
+      const response = await analyzeProductsMock(products);
+
+      if (response.success) {
+        setAnalyzedProducts(response.data.products);
+        setAnalysisData(response.data.analysis);
+        setView('comparison');
+      } else {
+        throw new Error('Error en el análisis');
       }
-    } else { //temporal en desarrollo
-      setProducts(SEED_PRODUCTS) // si no hay productos, usar productos de ejemplo
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(SEED_PRODUCTS)) // guardar productos de ejemplo en localStorage
+    } catch (err) {
+      setError(err.message || 'Error al analizar productos');
+      console.error('Error en análisis:', err);
+    } finally {
+      setLoading(false);
     }
-  },[])
+  };
 
-  //Metodo para guardar productos en el localStorage
-  const saveProducts = (next) => {
-    setProducts(next) // actualizar estado
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next)) // guardar en localStorage
-  }
+  // Aplicar cambios sugeridos
+  const handleApplyChanges = () => {
+    // Actualizar orden actual con el sugerido
+    const updatedProducts = analyzedProducts.map(p => ({
+      ...p,
+      orden_actual: p.orden_sugerido
+    }));
 
-  //Metodo para crear un nuevo producto
-  const handleCreate = (Payload) => {
-    const p = { ...Payload, id: uid() } // crear producto
-    saveProducts([...products, p]) // guardar producto
-    setShowForm(false) // cerrar formulario
-  }
+    setProducts(updatedProducts);
+    setView('loaded');
+    setAnalyzedProducts(null);
+    setAnalysisData(null);
+    
+    // Opcional: Guardar en backend
+    // saveNewOrder(updatedProducts);
+  };
 
-  //Metodo para editar un producto
-  const handleUpdate = (id, Payload) => {
-    const next = products.map((p) => (p.id === id ? { ...p, ...Payload } : p)) // actualizar producto
-    saveProducts(next) // guardar producto
-    setEditing(null) // cerrar formulario
-    setShowForm(false) // cerrar formulario en forma de contingencia
-  }
+  // Cancelar comparación
+  const handleCancelComparison = () => {
+    setView('loaded');
+    setAnalyzedProducts(null);
+    setAnalysisData(null);
+  };
 
-  //Metodo para eliminar un producto
-  const handleDelete = (id) => {
-    if(!confirm('¿Está seguro de que desea eliminar este producto?')) return // confirmar eliminación
-    const next = products.filter((p) => p.id !== id) // eliminar producto
-    saveProducts(next) // guardar producto
-    if (selected?.id === id) setSelected(null) // deseleccionar si es el seleccionado
-  }
+  // Descargar resultados
+  const handleExport = () => {
+    const dataToExport = analyzedProducts || products;
+    exportToCSV(dataToExport, `productos_${new Date().toISOString().split('T')[0]}.csv`);
+  };
 
-  const filtered = products.filter((p) => p.name.toLowerCase().includes(query.toLowerCase()) || p.description.toLowerCase().includes(query.toLowerCase())) // filtrar productos
-
+  // Reiniciar aplicación
+  const handleReset = () => {
+    if (confirm('¿Estás seguro de que deseas cargar un nuevo archivo? Se perderán los datos actuales.')) {
+      setProducts([]);
+      setFileName(null);
+      setAnalyzedProducts(null);
+      setAnalysisData(null);
+      setView('upload');
+      setError(null);
+    }
+  };
 
   return (
-    <div className="container py-4">
+    <div className="container-fluid py-4">
+      {/* Header */}
       <header className="mb-4">
-        <div className="d-flex justify-content-between align-items-center">
-          <div>
-            <h1 className="fw-bold">Productos — CRUD</h1>
-            <p className="text-muted">Frontend con React + Bootstrap</p>
+        <div className="row align-items-center">
+          <div className="col-md-8">
+            <h1 className="fw-bold mb-1">
+              🤖 Optimizador de Productos con IA
+            </h1>
+            <p className="text-muted mb-0">
+              Sistema inteligente para optimizar el orden de productos basado en ventas
+            </p>
           </div>
-
-
-          <div className="d-flex gap-2">
-            <input className="form-control" placeholder="Buscar..." value={query} onChange={(e) => setQuery(e.target.value)} />
-            <button className="btn btn-primary" onClick={() => { setEditing(null); setShowForm(true) }}>+ Nuevo</button>
+          <div className="col-md-4 text-end">
+            {fileName && (
+              <div className="d-flex gap-2 justify-content-end">
+                <button 
+                  className="btn btn-outline-primary btn-sm"
+                  onClick={handleExport}
+                  disabled={loading}
+                >
+                  📥 Exportar
+                </button>
+                <button 
+                  className="btn btn-outline-secondary btn-sm"
+                  onClick={handleReset}
+                  disabled={loading}
+                >
+                  🔄 Nuevo Archivo
+                </button>
+              </div>
+            )}
           </div>
         </div>
+        
+        {fileName && (
+          <div className="mt-2">
+            <span className="badge bg-light text-dark">
+              📄 {fileName} • {products.length} productos
+            </span>
+          </div>
+        )}
       </header>
 
-
-      <div className="row g-4">
-      {/* LISTA */}
-      <div className="col-lg-9">
-        <div className="row g-3">
-          {filtered.length === 0 ? (
-          <div className="text-center text-muted">No hay productos</div>
-          ) : (
-            filtered.map((p) => (
-            <div className="col-12 col-sm-6 col-md-4" key={p.id}>
-            <ProductCard product={p} onSelect={() => setSelected(p)} onEdit={() => { setEditing(p); setShowForm(true) }} onDelete={() => handleDelete(p.id)} />
-            </div>
-          ))
-          )}
+      {/* Error global */}
+      {error && (
+        <div className="alert alert-danger alert-dismissible fade show" role="alert">
+          <strong>Error:</strong> {error}
+          <button 
+            type="button" 
+            className="btn-close" 
+            onClick={() => setError(null)}
+          ></button>
         </div>
-      </div>
+      )}
 
-
-      {/* ASIDE */}
-      <div className="col-lg-3">
-        <div className="card shadow-sm">
-          <div className="card-body">
-            <h5 className="fw-bold">Detalle del producto</h5>
-
-            {!selected ? (
-            <p className="text-muted mt-3">Selecciona un producto</p>
-            ) : (
-            <div className="mt-3">
-              <h6 className="fw-bold">{selected.name}</h6>
-              <p className="text-muted">{selected.description}</p>
-              <div className="d-flex justify-content-between mt-3">
-                <div><small className="text-muted">Precio</small><div className="fw-bold">${selected.price}</div></div>
-                <div><small className="text-muted">Stock</small><div className="fw-bold">{selected.stock}</div></div>
-              </div>
-
-
-              <div className="d-flex gap-2 mt-3">
-                <button className="btn btn-warning btn-sm" onClick={() => { setEditing(selected); setShowForm(true) }}>Editar</button>
-                <button className="btn btn-danger btn-sm" onClick={() => handleDelete(selected.id)}>Eliminar</button>
-                <button className="btn btn-secondary btn-sm" onClick={() => setSelected(null)}>Cerrar</button>
+      {/* Vista: Cargar archivo */}
+      {view === 'upload' && (
+        <div className="row justify-content-center">
+          <div className="col-lg-8">
+            <FileUploader 
+              onFileLoaded={handleFileLoaded}
+              disabled={loading}
+            />
+            
+            {/* Instrucciones */}
+            <div className="card shadow-sm mt-4">
+              <div className="card-body">
+                <h5 className="card-title">📖 ¿Cómo funciona?</h5>
+                <ol className="mb-0">
+                  <li className="mb-2">
+                    <strong>Carga tu archivo:</strong> Sube un CSV o Excel con los datos de ventas del día anterior
+                  </li>
+                  <li className="mb-2">
+                    <strong>Visualiza productos:</strong> Revisa el orden actual de tus productos
+                  </li>
+                  <li className="mb-2">
+                    <strong>Analiza con IA:</strong> Nuestra IA analizará patrones de venta, stock y precios
+                  </li>
+                  <li className="mb-0">
+                    <strong>Aplica cambios:</strong> Obtén recomendaciones y aplica el nuevo orden óptimo
+                  </li>
+                </ol>
               </div>
             </div>
-            )}
-
-
-            <hr className="my-4" />
-            <small className="text-muted">Total productos: {products.length}</small><br />
-            <small className="text-muted">Filtrados: {filtered.length}</small>
           </div>
         </div>
-      </div>
-    </div>
+      )}
 
+      {/* Vista: Productos cargados */}
+      {view === 'loaded' && (
+        <div>
+          <div className="row mb-4">
+            <div className="col-12">
+              <div className="card shadow-sm">
+                <div className="card-body">
+                  <div className="d-flex justify-content-between align-items-center">
+                    <div>
+                      <h5 className="mb-1">Productos Cargados</h5>
+                      <p className="text-muted mb-0">
+                        Orden actual de {products.length} productos
+                      </p>
+                    </div>
+                    <button
+                      className="btn btn-primary btn-lg"
+                      onClick={handleAnalyze}
+                      disabled={loading || products.length === 0}
+                    >
+                      {loading ? (
+                        <>
+                          <span className="spinner-border spinner-border-sm me-2"></span>
+                          Analizando...
+                        </>
+                      ) : (
+                        <>
+                          🤖 Analizar con IA
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
 
-    {/* MODAL */}
-    {showForm && (
-    <Modal onClose={() => { setShowForm(false); setEditing(null) }}>
-    <ProductForm initial={editing} onCreate={handleCreate} onUpdate={handleUpdate} onCancel={() => { setShowForm(false); setEditing(null) }} />
-    </Modal>
-    )}
+          <ProductTable 
+            products={products}
+            title="Orden Actual de Productos"
+          />
+        </div>
+      )}
+
+      {/* Vista: Comparación */}
+      {view === 'comparison' && analyzedProducts && (
+        <ComparisonView
+          originalProducts={products}
+          analyzedProducts={analyzedProducts}
+          analysisData={analysisData}
+          onApplyChanges={handleApplyChanges}
+          onCancel={handleCancelComparison}
+        />
+      )}
+
+      {/* Footer */}
+      <footer className="mt-5 pt-4 border-top text-center text-muted">
+        <p className="small mb-0">
+          Optimizador de Productos con IA • Desarrollado con React + Bootstrap
+        </p>
+      </footer>
     </div>
-)
+  );
 }
